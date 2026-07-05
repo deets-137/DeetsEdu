@@ -23,6 +23,10 @@ Pandemic-era companion to SEDA 5.0. District achievement in **2019, 2022, 2023**
 
 NCES Common Core of Data district directory, **2009–2024**, one parquet per year (~18–20k districts/year, 69 columns): identifiers, enrollment, locale/urbanicity codes, addresses, grade spans. The universe of US public school districts — the **spine** of the panel and source of control variables. Pulled via the Urban Institute Education Data Portal API. Note: NCES changed the district universe definition in 2018 (~1k district jump). https://educationdata.urban.org/documentation/
 
+### CCD enrollment — `data/raw/ccd_enrollment/`
+
+NCES CCD district enrollment **disaggregated by race**, 2009–2024, via the same Urban Institute API. The directory table (above) carries only *total* enrollment; this endpoint adds the demographic breakdown — the source of race-composition **control variables**. Default pull (`ccd_enroll`) grabs grade-99 (district total across grades), one parquet per year-grade: `ccd_enrollment_{year}_grade99.parquet`, one row per district-race (`race` code, `sex`=99 = both). The opt-in `ccd_enroll_grade` target pulls the same by individual grade (K–12 + ungraded), matching SEDA's district×grade granularity. Joins to everything else on `leaid`. https://educationdata.urban.org/documentation/
+
 ### PSS — `data/raw/pss/`
 
 NCES Private School Universe Survey, biennial, **2009-10 through 2021-22** (7 collections). Enrollment, demographics, staffing, religious affiliation for ~22k private schools. The only private-school coverage in the corpus — **no test scores exist for private schools**, so this supports descriptive/context analyses, not outcome modeling. Merge across years on `PIN`; link to public data by geography (county/state), not district. Layout workbooks (`*.xlsx`) are extracted alongside the zips. 2023-24 collection lands spring 2026. https://nces.ed.gov/surveys/pss/pssdata.asp
@@ -43,8 +47,16 @@ NCES Private School Universe Survey, biennial, **2009-10 through 2021-22** (7 co
 
 ```bash
 pip install requests pandas pyarrow
-python pull_data.py            # default: seda + ccd + seda2023 + pss
-python pull_data.py erate      # opt-in pulls by name (crdc, ipeds, erate)
+python pull_data.py            # interactive checklist: shows what's on disk, pick what to fetch
+python pull_data.py --list     # just print download status and exit
+python pull_data.py erate      # non-interactive: pull named targets directly
 ```
+
+Running with no arguments in a terminal opens a checklist that shows each
+dataset's on-disk status (`OK` complete / `..` partial / `--` none), a rough
+size estimate of what's left to download (e.g. `~25 MB`, `~4.0 GB`), and a
+running total for the current selection — so you can gauge the download before
+committing. Toggle items by number; no need to remember target names. Passing
+names skips the menu. All pulls are idempotent: existing files are skipped.
 
 Convention: `data/raw/` stays byte-for-byte as published (zips stay zipped — pandas reads them directly); anything cleaned/merged goes in `data/processed/`.

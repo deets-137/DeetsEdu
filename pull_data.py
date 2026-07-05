@@ -3,18 +3,25 @@ pull_data.py — Download all project datasets into ./data/raw/
 
 Usage:
     pip install requests pandas pyarrow
-    python pull_data.py                  # default: seda + ccd + seda2023 + pss
-    python pull_data.py crdc erate       # opt-in big pulls by name
+    python pull_data.py                  # interactive checklist (pick what to fetch)
+    python pull_data.py crdc erate       # non-interactive: named targets
+    python pull_data.py --list           # print download status and exit
     python pull_data.py seda ccd seda2023 pss crdc ipeds erate   # everything
 
+Run with no arguments in a terminal to get a checklist showing what's already
+on disk and let you toggle datasets to download. Passing target names skips the
+menu (handy for scripts/cron); with no TTY it falls back to the default set.
+
 Targets:
-    seda      SEDA 5.0 district achievement 2009-2019 + covariates + crosswalk
-    ccd       NCES CCD district directory 2009-2024 (via Urban Institute API)
-    seda2023  SEDA pandemic-era scores: 2019/2022/2023 achievement + changes
-    pss       NCES Private School Universe Survey, biennial 2009-10 to 2021-22
-    crdc      Civil Rights Data Collection school characteristics (opt-in, big)
-    ipeds     IPEDS college directory (opt-in)
-    erate     FCC E-Rate commitments from USAC (opt-in, big)
+    seda        SEDA 5.0 district achievement 2009-2019 + covariates + crosswalk
+    ccd         NCES CCD district directory 2009-2024 (via Urban Institute API)
+    ccd_enroll  CCD district enrollment by race, grade totals 2009-2024
+    seda2023    SEDA pandemic-era scores: 2019/2022/2023 achievement + changes
+    pss         NCES Private School Universe Survey, biennial 2009-10 to 2021-22
+    crdc        Civil Rights Data Collection school characteristics (opt-in, big)
+    ipeds       IPEDS college directory (opt-in)
+    erate       FCC E-Rate commitments from USAC (opt-in, big)
+    ccd_enroll_grade  CCD enrollment by race for every grade K-12 (opt-in, big)
 
 Idempotent: skips files that already exist. Delete a file to re-download.
 """
@@ -64,6 +71,15 @@ UI_BASE = "https://educationdata.urban.org/api/v1"
 CCD_YEARS = range(2009, 2025)      # through SY 2024-25 (latest available)
 CRDC_YEARS = [2011, 2013, 2015, 2017, 2020]  # biennial; labels = fall year
 IPEDS_YEARS = range(2009, 2024)
+
+# CCD enrollment endpoint (disaggregated by race) — the directory table has
+# only total enrollment, so this is the source of demographic controls that
+# match SEDA's district x grade granularity. The endpoint requires a grade in
+# the path; grade 99 = total across all grades, 0 = kindergarten, 1-12 = grades,
+# 13/14/15 = grade 13 / ungraded / adult ed (rare). The /race/ path returns one
+# row per district-race with sex=99 (both sexes). Row counts ~145-170k/year.
+CCD_ENROLL_TOTAL_GRADE = 99                 # district total across all grades
+CCD_ENROLL_GRADES = list(range(0, 16))      # K(0), 1-12, plus 13/14/15
 
 # ---------------------------------------------------------------- PSS (private schools)
 # NCES Private School Universe Survey — biennial universe of US private schools.
@@ -170,6 +186,37 @@ def pull_ccd() -> None:
         print(f"    done ({len(rows):,} districts)")
 
 
+def pull_ccd_enrollment(grades, disagg: str = "race") -> None:
+    """CCD district enrollment by {disagg}, one parquet per year-grade.
+
+    Files are always grade-tagged (ccd_enrollment_{year}_grade{g}.parquet) so
+    the grade-99 totals and individual-grade pulls coexist without collision.
+    Writes to data/raw/ccd_enrollment/ — separate from the ccd/ directory
+    files, so nothing already on disk is re-pulled. Existing files are skipped.
+    """
+    import pandas as pd
+
+    out = DATA / "ccd_enrollment"
+    out.mkdir(parents=True, exist_ok=True)
+    print(f"ccd_enrollment (Urban Institute API, by {disagg}) ->", out)
+    for year in CCD_YEARS:
+        for g in grades:
+            dest = out / f"ccd_enrollment_{year}_grade{g}.parquet"
+            if dest.exists():
+                print(f"  skip (exists): {dest.name}")
+                continue
+            url = f"{UI_BASE}/school-districts/ccd/enrollment/{year}/grade-{g}/{disagg}/"
+            print(f"  fetching {year} grade-{g} by {disagg}...")
+            try:
+                rows = fetch_paged_json(url)
+            except requests.HTTPError as e:
+                print(f"    {year} grade-{g} not available "
+                      f"({e.response.status_code}), skipping")
+                continue
+            pd.DataFrame(rows).to_parquet(dest, index=False)
+            print(f"    done ({len(rows):,} rows)")
+
+
 def pull_erate() -> None:
     """E-Rate commitments, one CSV per funding year, paged via Socrata API."""
     out = DATA / "erate"
@@ -214,6 +261,8 @@ def pull_erate() -> None:
 TARGETS = {
     "seda": lambda: pull_files("seda", SEDA_BASE, SEDA_FILES),
     "ccd": pull_ccd,
+    "ccd_enroll": lambda: pull_ccd_enrollment([CCD_ENROLL_TOTAL_GRADE], "race"),
+    "ccd_enroll_grade": lambda: pull_ccd_enrollment(CCD_ENROLL_GRADES, "race"),
     "seda2023": lambda: pull_files("seda2023", SEDA23_BASE, SEDA23_FILES),
     "pss": lambda: pull_files("pss", PSS_BASE, PSS_FILES),
     "crdc": lambda: pull_ui_endpoint(
@@ -224,13 +273,171 @@ TARGETS = {
     ),
     "erate": pull_erate,
 }
-DEFAULT_TARGETS = ["seda", "ccd", "seda2023", "pss"]
+DEFAULT_TARGETS = ["seda", "ccd", "ccd_enroll", "seda2023", "pss"]
+
+# One-line descriptions for the interactive checklist (order = menu order).
+DESCRIPTIONS = {
+    "seda": "SEDA 5.0 district achievement 2009-2019 + covariates",
+    "ccd": "CCD district directory 2009-2024",
+    "ccd_enroll": "CCD enrollment by race, district totals 2009-2024",
+    "ccd_enroll_grade": "CCD enrollment by race, every grade K-12 (big)",
+    "seda2023": "SEDA pandemic scores 2019/2022/2023 + changes",
+    "pss": "Private School Universe Survey 2009-10 to 2021-22",
+    "crdc": "Civil Rights Data Collection, school characteristics (big)",
+    "ipeds": "IPEDS college/university directory",
+    "erate": "FCC E-Rate connectivity commitments 2016+ (big)",
+}
+
+# Rough full-download size per target, in MB — measured on disk where available,
+# extrapolated from row counts otherwise. Only used to warn how heavy a pull is;
+# treat as order-of-magnitude ("~"), not exact. erate is by far the largest
+# (~1.4M rows *per* funding year); ipeds is tiny (~6k institutions/year).
+SIZES_MB = {
+    "seda": 1300,        # measured
+    "ccd": 45,           # measured
+    "ccd_enroll": 7,     # ~0.4 MB/year x 16
+    "ccd_enroll_grade": 90,   # ~0.35 MB x 256 year-grade files
+    "seda2023": 75,      # measured
+    "pss": 28,           # measured
+    "crdc": 300,         # estimate, school-level x 5 collections
+    "ipeds": 25,         # ~6.4k rows/year x 15
+    "erate": 4000,       # estimate, ~1.4M rows/year CSV x ~10 years
+}
+
+
+def fmt_size(mb: float) -> str:
+    """Human-rounded size with a '~' to signal it's an estimate."""
+    if mb <= 0:
+        return "-"
+    if mb >= 1000:
+        return f"~{mb / 1000:.1f} GB"
+    return f"~{mb:.0f} MB"
+
+
+# ================================================================ status / CLI
+def expected_files(target: str) -> list[Path]:
+    """The files a target is expected to produce, for download-status checks."""
+    d = DATA
+    if target == "seda":
+        return [d / "seda" / f for f in SEDA_FILES]
+    if target == "ccd":
+        return [d / "ccd" / f"ccd_directory_{y}.parquet" for y in CCD_YEARS]
+    if target == "ccd_enroll":
+        g = CCD_ENROLL_TOTAL_GRADE
+        return [d / "ccd_enrollment" / f"ccd_enrollment_{y}_grade{g}.parquet"
+                for y in CCD_YEARS]
+    if target == "ccd_enroll_grade":
+        return [d / "ccd_enrollment" / f"ccd_enrollment_{y}_grade{g}.parquet"
+                for y in CCD_YEARS for g in CCD_ENROLL_GRADES]
+    if target == "seda2023":
+        return [d / "seda2023" / f for f in SEDA23_FILES]
+    if target == "pss":
+        return [d / "pss" / f for f in PSS_FILES]
+    if target == "crdc":
+        return [d / "crdc" / f"crdc_{y}.parquet" for y in CRDC_YEARS]
+    if target == "ipeds":
+        return [d / "ipeds" / f"ipeds_{y}.parquet" for y in IPEDS_YEARS]
+    if target == "erate":
+        return [d / "erate" / f"erate_commitments_{y}.csv" for y in ERATE_YEARS]
+    return []
+
+
+def status(target: str) -> tuple[str, int, int]:
+    """Return (label, have, total) where label is none|partial|complete."""
+    files = expected_files(target)
+    have = sum(1 for f in files if f.exists() and f.stat().st_size > 0)
+    total = len(files)
+    if total and have == total:
+        return "complete", have, total
+    if have == 0:
+        return "none", have, total
+    return "partial", have, total
+
+
+def remaining_mb(target: str) -> float:
+    """Estimated MB left to download (full size scaled by missing fraction)."""
+    _, have, total = status(target)
+    full = SIZES_MB.get(target, 0)
+    if total == 0:
+        return full
+    return full * (total - have) / total
+
+
+def print_status() -> None:
+    for t in TARGETS:
+        label, have, total = status(t)
+        mark = {"complete": "OK", "partial": "..", "none": "--"}[label]
+        left = "done" if label == "complete" else fmt_size(remaining_mb(t))
+        print(f"  {mark}  {have:>3}/{total:<3}  {left:>8}  {t:<17} "
+              f"{DESCRIPTIONS[t]}")
+
+
+def interactive_select() -> list[str]:
+    """Show a checklist of targets with on-disk status; return chosen targets."""
+    order = list(TARGETS)
+    # Pre-select default targets that aren't fully downloaded yet.
+    selected = {t for t in DEFAULT_TARGETS if status(t)[0] != "complete"}
+    while True:
+        print("\n  DeetsEdu data downloader - select datasets to fetch")
+        print("  (size column = rough estimate of what's left to download)\n")
+        for i, t in enumerate(order, 1):
+            label, have, total = status(t)
+            mark = {"complete": "OK", "partial": "..", "none": "--"}[label]
+            box = "[x]" if t in selected else "[ ]"
+            left = "done" if label == "complete" else fmt_size(remaining_mb(t))
+            print(f"  {i:>2}  {box}  {mark} {have:>3}/{total:<3}  {left:>8}  "
+                  f"{t:<17} {DESCRIPTIONS[t]}")
+        sel_total = sum(remaining_mb(t) for t in selected)
+        print(f"\n  selected: {len(selected)} dataset(s), "
+              f"~{fmt_size(sel_total).lstrip('~')} to download")
+        print("  toggle: numbers (e.g. '2 3')   a=all  n=none  d=defaults")
+        print("  Enter=download selected   q=quit")
+        try:
+            raw = input("  > ").strip().lower()
+        except EOFError:
+            return []
+        if raw == "q":
+            return []
+        if raw == "a":
+            selected = set(order)
+            continue
+        if raw == "n":
+            selected = set()
+            continue
+        if raw == "d":
+            selected = set(DEFAULT_TARGETS)
+            continue
+        if raw == "":
+            chosen = [t for t in order if t in selected]
+            if not chosen:
+                print("  nothing selected — pick some or 'q' to quit")
+                continue
+            return chosen
+        for tok in raw.replace(",", " ").split():
+            if tok.isdigit() and 1 <= int(tok) <= len(order):
+                selected ^= {order[int(tok) - 1]}
+            else:
+                print(f"  ? ignoring '{tok}'")
+
 
 if __name__ == "__main__":
-    requested = sys.argv[1:] or DEFAULT_TARGETS
-    unknown = [t for t in requested if t not in TARGETS]
-    if unknown:
-        sys.exit(f"Unknown target(s): {unknown}. Options: {list(TARGETS)}")
+    args = sys.argv[1:]
+    if args and args[0] in ("--list", "-l"):
+        print_status()
+        sys.exit(0)
+    if args:
+        requested = args
+        unknown = [t for t in requested if t not in TARGETS]
+        if unknown:
+            sys.exit(f"Unknown target(s): {unknown}. Options: {list(TARGETS)}")
+    elif sys.stdin.isatty():
+        requested = interactive_select()
+        if not requested:
+            print("Nothing selected. Bye.")
+            sys.exit(0)
+        print(f"\nDownloading: {', '.join(requested)}\n")
+    else:
+        requested = DEFAULT_TARGETS
     for t in requested:
         TARGETS[t]()
     print("\nDone. Raw data in", DATA)
