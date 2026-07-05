@@ -2,6 +2,17 @@
 
 Local corpus for modeling impacts of technology and education policy on US education outcomes. ~1.4 GB in `data/raw/`, pulled via `pull_data.py` (idempotent — re-run anytime, existing files are skipped).
 
+## Project goal
+
+The first thing we'd like to do is a queryable database where each district's
+scores are presented as a timeseries via SEDA's data, along with CCD data.
+Effectively, we'll visualize the data for folks to see how education is and has
+been doing.
+
+See [data.md](data.md) for the build strategy — how the raw files below become
+that database (DuckDB as the build engine, a `district_year` fact table, emitted
+as both `.duckdb` and portable `.sqlite`).
+
 ## Data sources on disk
 
 ### SEDA 5.0 — `data/raw/seda/`
@@ -60,3 +71,7 @@ committing. Toggle items by number; no need to remember target names. Passing
 names skips the menu. All pulls are idempotent: existing files are skipped.
 
 Convention: `data/raw/` stays byte-for-byte as published (zips stay zipped — pandas reads them directly); anything cleaned/merged goes in `data/processed/`.
+
+## Status & next steps
+
+Current on-disk state and what to build next: see [handoff.md](handoff.md).
