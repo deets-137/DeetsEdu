@@ -1,0 +1,17 @@
+# Data files
+data/
+
+# Obsidian workspace
+.obsidian/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.env
+
+# OS
+.DS_Store
+Thumbs.db
