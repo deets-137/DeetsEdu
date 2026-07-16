@@ -4,10 +4,9 @@ Local corpus for modeling impacts of technology and education policy on US educa
 
 ## Project goal
 
-The first thing we'd like to do is a queryable database where each district's
-scores are presented as a timeseries via SEDA's data, along with CCD data.
-Effectively, we'll visualize the data for folks to see how education is and has
-been doing.
+First milestone: a queryable database of each district's scores as a
+timeseries — SEDA outcomes joined with CCD data — and visualizations on top of
+it, so anyone can see how US education is doing and how it has changed.
 
 See [data.md](data.md) for the build strategy — how the raw files below become
 that database (DuckDB as the build engine, a `district_year` fact table, emitted
@@ -72,6 +71,21 @@ names skips the menu. All pulls are idempotent: existing files are skipped.
 
 Convention: `data/raw/` stays byte-for-byte as published (zips stay zipped — pandas reads them directly); anything cleaned/merged goes in `data/processed/`.
 
-## Status & next steps
+## Status
 
-Current on-disk state and what to build next: see [handoff.md](handoff.md).
+- On disk: `seda` (5 files, ~1.2 GB, 2009–2019), `ccd` directory (2009–2024),
+  `ccd_enrollment` by race (2009–2023; the 2024 grade-99 file is still pending).
+  `seda2023` and `pss` are default targets but not yet fetched.
+  `python pull_data.py --list` shows the live status; re-running the pull is
+  idempotent and finishes anything partial or missing.
+- Next step: write `build_db.py` — the cleaning + join + `district_year` fact
+  table that emits `data/processed/deetsedu.{duckdb,sqlite}`. Design, storage
+  rationale, and the build footguns (zero-padded `leaid`, `.`-nulls, the
+  CA-2014 gap, the 2018 universe jump, weight-by-`tot_asmt`) are documented in
+  [data.md](data.md).
+
+## License
+
+Code is [MIT](LICENSE). The license does not cover the data: each dataset
+stays under its source's terms — notably SEDA's data-use agreement
+(non-commercial, cite Reardon et al. (2024); see the SEDA sections above).
