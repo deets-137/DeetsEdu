@@ -1,5 +1,7 @@
 # DeetsEdu — education policy data
 
+**Status:** the download pipeline works and the raw corpus is on disk; the database build (`build_db.py`) is not written yet · **Platform:** Python
+
 Local corpus for modeling impacts of technology and education policy on US education outcomes. ~1.4 GB in `data/raw/`, pulled via `pull_data.py` (idempotent — re-run anytime, existing files are skipped).
 
 ## Project goal
