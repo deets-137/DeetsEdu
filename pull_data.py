@@ -18,6 +18,7 @@ Targets:
     ccd_enroll  CCD district enrollment by race, grade totals 2009-2024
     seda2023    SEDA pandemic-era scores: 2019/2022/2023 achievement + changes
     pss         NCES Private School Universe Survey, biennial 2009-10 to 2021-22
+    tiger       Census school-district boundary shapefiles (2019, 1:500k)
     crdc        Civil Rights Data Collection school characteristics (opt-in, big)
     ipeds       IPEDS college directory (opt-in)
     erate       FCC E-Rate commitments from USAC (opt-in, big)
@@ -100,6 +101,41 @@ PSS_FILES = [
     "layout2019-20.zip",
 ]
 
+# ---------------------------------------------------------------- TIGER boundaries
+# Census cartographic boundary shapefiles for school districts, 2019 vintage
+# (matches SEDA 5.0's anchor year), 1:500k generalized — made for thematic
+# mapping, far smaller than full TIGER/Line. One zip per state per district
+# type; each polygon's GEOID equals the NCES leaid used by SEDA/CCD.
+#   unsd = unified K-12 districts (most of the country)
+#   elsd/scsd = separate elementary/secondary districts (overlap each other;
+#               only some states have them)
+# Directory listing: https://www2.census.gov/geo/tiger/GENZ2019/shp/
+TIGER_BASE = "https://www2.census.gov/geo/tiger/GENZ2019/shp"
+TIGER_SD_TYPES = {
+    # State FIPS codes that have a file of each type on the server (incl.
+    # DC=11 and territories 60/66/69/72/78 — filter territories in
+    # processing if the map stays continental-US only).
+    "unsd": ["01", "02", "04", "05", "06", "08", "09", "10", "11", "12",
+             "13", "15", "16", "17", "18", "19", "20", "21", "22", "23",
+             "24", "25", "26", "27", "28", "29", "30", "31", "32", "33",
+             "34", "35", "36", "37", "38", "39", "40", "41", "42", "44",
+             "45", "46", "47", "48", "49", "50", "51", "53", "54", "55",
+             "56", "60", "66", "69", "72", "78"],
+    "elsd": ["01", "04", "06", "09", "13", "17", "21", "23", "25", "26",
+             "27", "29", "30", "33", "34", "36", "38", "40", "41", "44",
+             "45", "47", "48", "50", "51", "55", "56"],
+    "scsd": ["04", "06", "09", "13", "17", "21", "23", "25", "27", "30",
+             "33", "34", "36", "40", "41", "44", "45", "47", "48", "55"],
+}
+TIGER_FILES = [
+    f"cb_2019_{fips}_{sdtype}_500k.zip"
+    for sdtype, fips_list in TIGER_SD_TYPES.items()
+    for fips in fips_list
+] + [
+    # State outlines (one national file) for the zoomed-out map view.
+    "cb_2019_us_state_5m.zip",
+]
+
 # ---------------------------------------------------------------- E-Rate (USAC)
 # "E-Rate Recipient Details and Commitments" — Socrata dataset avi8-svp9.
 # Docs: https://dev.socrata.com/foundry/opendata.usac.org/avi8-svp9
@@ -124,13 +160,36 @@ def download(url: str, dest: Path) -> None:
     print(f"    done ({dest.stat().st_size / 1e6:.1f} MB)")
 
 
+def get_with_retry(url: str, tries: int = 5, timeout: int = 120,
+                   **kwargs) -> requests.Response:
+    """GET with retries on timeouts/connection drops (the UI API is flaky)."""
+    for attempt in range(1, tries + 1):
+        try:
+            resp = requests.get(url, timeout=timeout, **kwargs)
+            resp.raise_for_status()
+            return resp
+        except (requests.Timeout, requests.ConnectionError) as e:
+            if attempt == tries:
+                raise
+            wait = 10 * attempt
+            print(f"    {type(e).__name__}, retry {attempt}/{tries - 1} "
+                  f"in {wait}s...")
+            time.sleep(wait)
+        except requests.HTTPError as e:
+            # retry server-side errors; 4xx are permanent, let caller handle
+            if attempt == tries or e.response.status_code < 500:
+                raise
+            wait = 10 * attempt
+            print(f"    HTTP {e.response.status_code}, retry "
+                  f"{attempt}/{tries - 1} in {wait}s...")
+            time.sleep(wait)
+
+
 def fetch_paged_json(url: str) -> list[dict]:
     """Follow Urban Institute API 'next' links, return all rows."""
     rows = []
     while url:
-        resp = requests.get(url, timeout=120)
-        resp.raise_for_status()
-        payload = resp.json()
+        payload = get_with_retry(url).json()
         rows.extend(payload["results"])
         url = payload.get("next")
         time.sleep(0.2)  # be polite
@@ -232,7 +291,7 @@ def pull_erate() -> None:
         offset, wrote_header = 0, False
         with open(tmp, "wb") as f:
             while True:
-                resp = requests.get(
+                resp = get_with_retry(
                     ERATE_URL,
                     params={
                         "$where": f"funding_year = '{year}'",
@@ -242,7 +301,6 @@ def pull_erate() -> None:
                     },
                     timeout=300,
                 )
-                resp.raise_for_status()
                 lines = resp.content.splitlines(keepends=True)
                 if len(lines) <= 1:  # header only = no more rows
                     break
@@ -265,6 +323,7 @@ TARGETS = {
     "ccd_enroll_grade": lambda: pull_ccd_enrollment(CCD_ENROLL_GRADES, "race"),
     "seda2023": lambda: pull_files("seda2023", SEDA23_BASE, SEDA23_FILES),
     "pss": lambda: pull_files("pss", PSS_BASE, PSS_FILES),
+    "tiger": lambda: pull_files("tiger", TIGER_BASE, TIGER_FILES),
     "crdc": lambda: pull_ui_endpoint(
         "crdc", "schools/crdc/school-characteristics", CRDC_YEARS
     ),
@@ -273,7 +332,7 @@ TARGETS = {
     ),
     "erate": pull_erate,
 }
-DEFAULT_TARGETS = ["seda", "ccd", "ccd_enroll", "seda2023", "pss"]
+DEFAULT_TARGETS = ["seda", "ccd", "ccd_enroll", "seda2023", "pss", "tiger"]
 
 # One-line descriptions for the interactive checklist (order = menu order).
 DESCRIPTIONS = {
@@ -283,6 +342,7 @@ DESCRIPTIONS = {
     "ccd_enroll_grade": "CCD enrollment by race, every grade K-12 (big)",
     "seda2023": "SEDA pandemic scores 2019/2022/2023 + changes",
     "pss": "Private School Universe Survey 2009-10 to 2021-22",
+    "tiger": "Census school-district boundaries, 2019 cartographic 1:500k",
     "crdc": "Civil Rights Data Collection, school characteristics (big)",
     "ipeds": "IPEDS college/university directory",
     "erate": "FCC E-Rate connectivity commitments 2016+ (big)",
@@ -299,6 +359,7 @@ SIZES_MB = {
     "ccd_enroll_grade": 90,   # ~0.35 MB x 256 year-grade files
     "seda2023": 75,      # measured
     "pss": 28,           # measured
+    "tiger": 40,         # 103 state-level 500k zips, mostly well under 1 MB
     "crdc": 300,         # estimate, school-level x 5 collections
     "ipeds": 25,         # ~6.4k rows/year x 15
     "erate": 4000,       # estimate, ~1.4M rows/year CSV x ~10 years
@@ -333,6 +394,8 @@ def expected_files(target: str) -> list[Path]:
         return [d / "seda2023" / f for f in SEDA23_FILES]
     if target == "pss":
         return [d / "pss" / f for f in PSS_FILES]
+    if target == "tiger":
+        return [d / "tiger" / f for f in TIGER_FILES]
     if target == "crdc":
         return [d / "crdc" / f"crdc_{y}.parquet" for y in CRDC_YEARS]
     if target == "ipeds":

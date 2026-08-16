@@ -31,6 +31,10 @@ NCES CCD district enrollment **disaggregated by race**, 2009–2024, via the sam
 
 NCES Private School Universe Survey, biennial, **2009-10 through 2021-22** (7 collections). Enrollment, demographics, staffing, religious affiliation for ~22k private schools. The only private-school coverage in the corpus — **no test scores exist for private schools**, so this supports descriptive/context analyses, not outcome modeling. Merge across years on `PIN`; link to public data by geography (county/state), not district. Layout workbooks (`*.xlsx`) are extracted alongside the zips. 2023-24 collection lands spring 2026. https://nces.ed.gov/surveys/pss/pssdata.asp
 
+### TIGER boundaries — `data/raw/tiger/`
+
+Census Bureau cartographic boundary shapefiles for school districts, **2019 vintage** (matching SEDA 5.0's anchor year), 1:500,000 generalized — pre-simplified versions of TIGER/Line intended for thematic mapping. One zip per state per district type: `unsd` (unified K-12, most of the country) plus `elsd`/`scsd` (separate elementary/secondary districts in ~half the states — these **overlap** each other geographically). Each polygon's `GEOID` equals the NCES `leaid`, so boundaries join directly to SEDA/CCD. Includes DC and territories; filter FIPS ≥ 60 for a continental-US map. Public domain. https://www.census.gov/geographies/mapping-files/time-series/geo/cartographic-boundary.html
+
 ## Join keys
 
 - `leaid` (NCES district ID) — SEDA (`sedalea`/`sedaadmin`) ↔ CCD
@@ -60,3 +64,17 @@ committing. Toggle items by number; no need to remember target names. Passing
 names skips the menu. All pulls are idempotent: existing files are skipped.
 
 Convention: `data/raw/` stays byte-for-byte as published (zips stay zipped — pandas reads them directly); anything cleaned/merged goes in `data/processed/`.
+
+## Map app
+
+Interactive district explorer: satellite basemap (Esri World Imagery, needs internet), school-district outlines, click or zip/address search to select a district. Achievement stats panel is a placeholder until the data build lands.
+
+```bash
+pip install fastapi uvicorn geopandas topojson pyogrio
+python build_boundaries.py        # one-time: shapefiles -> data/processed/ artifacts
+uvicorn app:app --port 8000       # then open http://localhost:8000
+```
+
+- `build_boundaries.py` — TIGER zips → `districts.topojson` (browser, 11 MB), `districts.parquet` (server point-in-polygon), `states.topojson`, `zip_centroids.json` (from the Census ZCTA gazetteer, downloaded on first run).
+- `app.py` — FastAPI: serves `static/` plus `/api/locate` (point → containing districts) and `/api/search` (zip via local gazetteer; addresses proxied to the free Census geocoder).
+- `static/` — MapLibre GL frontend. Unified + elementary districts draw outlines (SEDA covers grades 3–8, so secondary districts have little score data); secondary districts stay clickable and appear in the pick list when they overlap.

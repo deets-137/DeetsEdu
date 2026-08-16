@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DeetsEdu — school district explorer</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="map"></div>
+
+  <div id="searchbox">
+    <form id="search-form" autocomplete="off">
+      <input id="search-input" type="text"
+             placeholder="Zip code or address…" spellcheck="false">
+      <button type="submit">Go</button>
+    </form>
+    <ul id="search-results" class="hidden"></ul>
+  </div>
+
+  <div id="panel" class="hidden">
+    <button id="panel-close" title="Close">&times;</button>
+    <div id="panel-body"></div>
+  </div>
+
+  <div id="loading">Loading district boundaries…</div>
+
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script src="https://unpkg.com/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
